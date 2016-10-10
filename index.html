@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<title>3DWebFest</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			html {
+				height: 100%;
+			}
+			body {
+				margin: 0;
+				padding: 0;
+				background-color: #808080;
+				color: #ffffff;
+				font-family: sans-serif;
+				font-size: 13px;
+				line-height: 20px;
+				height: 100%;
+				overflow: hidden
+			}
+			#container {
+				position: absolute;
+				left: 0;
+				top: 0;
+				right: 0;
+				bottom: 0;
+				width: 100%;
+				height: 100%;
+			}
+			#data{
+				position: absolute;
+				left: 10px; top: 10px;
+				z-index: 100
+			}
+		</style>
+	</head>
+	<body>
+
+	<div id="container"></div>
+	<div id="data" ></div>
+		
+<script src="js/isMobile.min.js"></script>
+<script src="js/Maf.js"></script>
+<script src="js/three.min.js"></script>
+<script src="js/OrbitControls.js"></script>
+<script src="js/THREE.MeshLine.js"></script>
+<script src="js/THREE.ConstantSpline.js"></script>
+
+<script src="Wagner/Wagner.js"></script>
+<script src="Wagner/Wagner.base.js"></script>
+<script src="Wagner/ShaderLoader.js"></script>
+
+<script type="x-shader/x-vertex" id="basic-vs">
+
+attribute vec3 position;
+attribute vec2 uv;
+
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+
+varying vec2 vUv;
+varying float depth;
+
+void main() {
+
+	vUv = uv;
+	vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+	gl_Position = projectionMatrix * mvPosition;
+	depth = gl_Position.z / 1100.; 
+
+}
+
+</script>
+
+<script type="x-shader/x-fragment" id="basic-fs">
+precision highp float;
+
+uniform sampler2D map;
+uniform float drawDepth;
+
+varying vec2 vUv;
+varying float depth;
+
+void main() {
+
+	if( drawDepth == 0. ) {
+		gl_FragColor = texture2D( map, vUv );
+	} else {
+		float a = 0.;
+		if( texture2D( map, vUv ).z > 0. ) a = 1.;
+		gl_FragColor = vec4( vec3( depth ), a );
+	}
+
+}
+
+</script>
+
+<script type="x-shader/x-vertex" id="particles-vs">
+
+attribute vec3 position;
+
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform vec3 cameraPosition;
+uniform float nearPlane;
+uniform float farPlane;
+
+varying float depth;
+
+void main() {
+	
+	vec3 pos = position;
+	vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+	float cameraDist = distance( mvPosition.xyz, cameraPosition );
+
+	gl_Position = projectionMatrix * mvPosition;
+	depth = gl_Position.z / 1100.; 
+	gl_PointSize = .5 / depth;
+
+}
+
+</script>
+
+<script type="x-shader/x-fragment" id="particles-fs">
+precision highp float;
+
+uniform float drawDepth;
+
+varying float depth;
+
+void main() {
+
+	vec2 circCoord = 2.0 * gl_PointCoord - 1.0;
+	float a = clamp( 1. - dot(circCoord, circCoord), 0., 1. );
+	a = smoothstep( 0., .5, a );
+	if( a == 0. ) discard;
+
+	if( drawDepth == 0. ) {
+		gl_FragColor = vec4( vec3( 1. ), a );
+	} else {
+		gl_FragColor = vec4( vec3( depth ), 1. );
+	}
+
+}
+
+</script>
+
+<script type="x-shader/x-vertex" id="sem-vs">
+
+attribute vec3 position;
+
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform float nearPlane;
+uniform float farPlane;
+
+vec3 mod289(vec3 x) {
+  return x - floor(x * (1.0 / 289.0)) * 289.0;
+}
+
+vec2 mod289(vec2 x) {
+  return x - floor(x * (1.0 / 289.0)) * 289.0;
+}
+
+vec3 permute(vec3 x) {
+  return mod289(((x*34.0)+1.0)*x);
+}
+
+float snoise(vec2 v)
+  {
+  const vec4 C = vec4(0.211324865405187,  // (3.0-sqrt(3.0))/6.0
+                      0.366025403784439,  // 0.5*(sqrt(3.0)-1.0)
+                     -0.577350269189626,  // -1.0 + 2.0 * C.x
+                      0.024390243902439); // 1.0 / 41.0
+// First corner
+  vec2 i  = floor(v + dot(v, C.yy) );
+  vec2 x0 = v -   i + dot(i, C.xx);
+
+// Other corners
+  vec2 i1;
+  //i1.x = step( x0.y, x0.x ); // x0.x > x0.y ? 1.0 : 0.0
+  //i1.y = 1.0 - i1.x;
+  i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+  // x0 = x0 - 0.0 + 0.0 * C.xx ;
+  // x1 = x0 - i1 + 1.0 * C.xx ;
+  // x2 = x0 - 1.0 + 2.0 * C.xx ;
+  vec4 x12 = x0.xyxy + C.xxzz;
+  x12.xy -= i1;
+
+// Permutations
+  i = mod289(i); // Avoid truncation effects in permutation
+  vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 ))
+		+ i.x + vec3(0.0, i1.x, 1.0 ));
+
+  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
+  m = m*m ;
+  m = m*m ;
+
+// Gradients: 41 points uniformly over a line, mapped onto a diamond.
+// The ring size 17*17 = 289 is close to a multiple of 41 (41*7 = 287)
+
+  vec3 x = 2.0 * fract(p * C.www) - 1.0;
+  vec3 h = abs(x) - 0.5;
+  vec3 ox = floor(x + 0.5);
+  vec3 a0 = x - ox;
+
+// Normalise gradients implicitly by scaling m
+// Approximation of: m *= inversesqrt( a0*a0 + h*h );
+  m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
+
+// Compute final noise value at P
+  vec3 g;
+  g.x  = a0.x  * x0.x  + h.x  * x0.y;
+  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+  return 130.0 * dot(m, g);
+}
+
+uniform float time;
+
+varying vec3 e;
+varying vec3 p;
+varying float depth;
+
+void main() {
+	
+	vec3 pos = position;
+
+	float r = 1.;
+	pos.x += r * snoise( vec2( pos.x, time ) );
+	pos.y += r * snoise( vec2( pos.y, time ) );
+	pos.z += r * snoise( vec2( pos.z, time ) );
+	
+	e = normalize( vec3( modelViewMatrix * vec4( pos, 1.0 ) ) );
+	p = ( modelViewMatrix * vec4( pos, 1. ) ).xyz;
+	gl_Position = projectionMatrix * modelViewMatrix * vec4( pos, 1. );
+	depth = gl_Position.z / 1100.; 
+
+}
+
+</script>
+
+<script type="x-shader/x-vertex" id="sem-fs">
+#extension GL_OES_standard_derivatives : enable
+
+precision highp float;
+	
+uniform sampler2D tMatCap;
+uniform float drawDepth;
+
+varying vec3 e;
+varying vec3 p;
+varying float depth;
+
+void main() {
+
+	if( drawDepth == 0. ) {
+		
+		vec3 fdx = vec3(dFdx(p.x),dFdx(p.y),dFdx(p.z));
+		vec3 fdy = vec3(dFdy(p.x),dFdy(p.y),dFdy(p.z));
+		vec3 n = normalize(cross(fdx,fdy));
+
+		vec3 r = reflect( e, n );
+		float m = 2. * sqrt( pow( r.x, 2. ) + pow( r.y, 2. ) + pow( r.z + 1., 2. ) );
+		vec2 vN = r.xy / m + .5;
+		vec3 base = texture2D( tMatCap, vN ).rgb;
+		gl_FragColor = vec4( base, .8 );
+
+	} else {
+
+		gl_FragColor = vec4( vec3( depth ), 1. );
+
+	}
+
+}
+	
+</script>
+
+<script>
+
+"use strict";
+
+(function(){
+
+  if ("performance" in window == false) {
+      window.performance = {};
+  }
+  
+  Date.now = (Date.now || function () {  // thanks IE8
+	  return new Date().getTime();
+  });
+
+  if ("now" in window.performance == false){
+    
+    var nowOffset = Date.now();
+    
+    if (performance.timing && performance.timing.navigationStart){
+      nowOffset = performance.timing.navigationStart
+    }
+
+    window.performance.now = function now(){
+      return Date.now() - nowOffset;
+    }
+  }
+
+})();
+
+WAGNER.vertexShadersPath = 'Wagner/vertex-shaders';
+WAGNER.fragmentShadersPath = 'Wagner/fragment-shaders';
+WAGNER.assetsPath = 'Wagner/assets/';
+
+var depthTexture;
+var data = document.getElementById( 'data' );
+
+THREE.Geometry.prototype.toFlatShading = function () {
+	var geometry = new THREE.BufferGeometry();
+	var positions = new Float32Array( this.faces.length * 3 * 3 );
+	var k = 0, map = [ 'a', 'b', 'c' ];
+	for ( var i = 0; i < this.faces.length; i ++ ) {
+		var face = this.faces[ i ];
+		for ( var j = 0; j < 3; j ++ ) {
+			var vertex = this.vertices[ face[ map[ j ] ] ];
+			vertex.toArray( positions, k );
+			k += 3;
+		}
+	}
+	geometry.addAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+	geometry.computeVertexNormals();
+	return geometry;
+};
+
+var links = document.querySelectorAll( 'a[rel=external]' );
+for( var j = 0; j < links.length; j++ ) {
+	var a = links[ j ];
+	a.addEventListener( 'click', function( e ) {
+		window.open( this.href, '_blank' );
+		e.preventDefault();
+	}, false );
+}
+
+var s = new THREE.ConstantSpline();
+var cameraPoints = [];
+
+var camera, controls,
+	scene, 
+	renderer, composer,
+	container,
+	mesh;
+var material, particleSystem;
+var fxaaPass, glowPass, vignettePass, noisePass, pixelatePass, rgbSplitPass, chromaticAberrationPass, bleachPass;
+var motionPass;
+
+var container = document.getElementById( 'container' );
+var plane = new THREE.Mesh(
+	new THREE.PlaneBufferGeometry( 708, 280 ),
+	new THREE.RawShaderMaterial( {
+		uniforms: { 
+			map: { type: 't', value: THREE.ImageUtils.loadTexture( 'assets/text.png' ) },
+			drawDepth: { type: 'f', value: 0 }
+		},
+		vertexShader: document.getElementById( 'basic-vs' ).textContent,
+		fragmentShader: document.getElementById( 'basic-fs' ).textContent,
+		transparent: true, 
+		depthWrite: false
+	} )
+);
+plane.scale.set( .25, .25, .25 );
+plane.position.y = -100
+
+var planeBack = plane.clone()
+planeBack.rotation.y = Math.PI;
+planeBack.scale.set( .25, .25, .25 );
+planeBack.position.y = -100
+
+window.addEventListener( 'load', init );
+
+var resolution = new THREE.Vector2( window.innerWidth, window.innerHeight );
+
+var lines = [];
+var dPR = window.devicePixelRatio;
+//dPR = 1;
+
+WAGNER.CameraMotionBlurPass = function() {
+
+	WAGNER.Pass.call( this );
+	WAGNER.log( 'CameraMotionBlurPass Pass constructor' );
+	this.loadShader( 'camera-motion-blur-fs.glsl' );
+
+	this.params.tBias = null;
+	this.params.delta = new THREE.Vector3( 0., 0., 0. );
+	this.params.invertBiasMap = false;
+	this.params.isPacked = 0;
+	this.params.from = 0;
+	this.params.to = 1;
+
+};
+
+WAGNER.CameraMotionBlurPass.prototype = Object.create( WAGNER.Pass.prototype );
+
+WAGNER.CameraMotionBlurPass.prototype.run = function( c ) {
+
+	this.shader.uniforms.tBias.value = this.params.tBias,
+	this.shader.uniforms.delta.value.copy( this.params.delta );
+	this.shader.uniforms.delta.value.multiplyScalar( .0001 );
+	this.shader.uniforms.invertBiasMap.value = this.params.invertBiasMap;
+	this.shader.uniforms.isPacked.value = this.params.isPacked;
+	this.shader.uniforms.from.value = this.params.from;
+	this.shader.uniforms.to.value = this.params.to;
+	c.pass( this.shader );
+
+}
+
+var clock = new THREE.Clock();
+
+function init() {
+
+	renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
+	renderer.setPixelRatio( dPR )
+	renderer.setClearColor( 0x181d30, 1 );
+
+	composer = new WAGNER.Composer( renderer, { useRGBA: true } );
+	fxaaPass = new WAGNER.FXAAPass();
+	glowPass = new WAGNER.MultiPassBloomPass();
+	glowPass.params.applyZoomBlur = true
+	glowPass.params.zoomBlurStrength = .5
+	glowPass.params.blurAmount = 5
+	glowPass.params.blendMode = WAGNER.BlendMode.Lighten;
+	glowPass.params.width = glowPass.params.height = 256
+	vignettePass = new WAGNER.Vignette2Pass();
+	vignettePass.params.reduction = .5;
+	vignettePass.params.boost = 1.5;
+	noisePass = new WAGNER.NoisePass();
+	noisePass.params.amount = .05;
+	noisePass.params.speed = .1
+	pixelatePass = new WAGNER.PixelatePass();
+	chromaticAberrationPass = new WAGNER.ChromaticAberrationPass();
+	rgbSplitPass = new WAGNER.RGBSplitPass();
+	rgbSplitPass.params.delta.set( 20, 0 )
+	bleachPass = new WAGNER.BleachPass()
+	motionPass = new WAGNER.CameraMotionBlurPass()
+
+	scene = new THREE.Scene();
+
+	scene.add( plane );
+	scene.add( planeBack );
+
+	camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 1, 1100 );
+	camera.target = new THREE.Vector3( 0, 0, 0 );
+	camera.position.z = 100;
+	scene.add( camera );
+
+	material = new THREE.RawShaderMaterial( {
+		uniforms: {
+			time: { type: 'f', value: 0 }, 
+			tMatCap: { type: 't', value: THREE.ImageUtils.loadTexture( 'matcap.jpg' ) },
+			nearPlane: { type: 'f', value: camera.near },
+			farPlane: { type: 'f', value: camera.far },
+			drawDepth: { type: 'f', value: 0 }
+		},
+		vertexShader: document.getElementById( 'sem-vs' ).textContent,
+		fragmentShader: document.getElementById( 'sem-fs' ).textContent,
+		shading: THREE.FlatShading,
+		side: THREE.FrontSide
+	} );
+	material.uniforms.tMatCap.value.wrapS = material.uniforms.tMatCap.value.wrapT = 
+	THREE.ClampToEdgeWrapping;
+
+	var r = 1.3;
+	var geometry = new THREE.IcosahedronGeometry( 51, 3 );
+	geometry.vertices.forEach( function( v ) {
+		v.x += r * ( .5 - Math.random() )
+		v.y += r * ( .5 - Math.random() )
+		v.z += r * ( .5 - Math.random() )
+		v.normalize().multiplyScalar( 50 + 2 * ( .5 - Math.random() ) )
+	} );
+	geometry.computeFaceNormals()
+	geometry.computeVertexNormals()
+	geometry.verticesNeedUpdate = true
+	geometry.normalsNeedUpdate = true
+
+	mesh = new THREE.Mesh( 
+		geometry, 
+		material
+	);
+	scene.add( mesh );
+
+	var particles = 5000;
+	var geometry = new THREE.BufferGeometry();
+	var positions = new Float32Array( particles * 3 );
+	var r = 500;
+	for ( var i = 0; i < positions.length; i += 3 ) {
+
+		var x = ( .5 - Math.random() ) * r;
+		var y = ( .5 - Math.random() ) * r;
+		var z = ( .5 - Math.random() ) * r;
+
+		positions[ i ]     = x;
+		positions[ i + 1 ] = y;
+		positions[ i + 2 ] = z;
+
+	}
+
+	geometry.addAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+	geometry.computeBoundingSphere();
+
+	var material = new THREE.RawShaderMaterial( {
+		uniforms: {
+			nearPlane: { type: 'f', value: camera.near },
+			farPlane: { type: 'f', value: camera.far },
+			drawDepth: { type: 'f', value: 0 }
+		},
+		vertexShader: document.getElementById( 'particles-vs' ).textContent,
+		fragmentShader: document.getElementById( 'particles-fs' ).textContent,
+		transparent: true,
+		blending: THREE.AdditiveBlending
+	} );
+
+	particleSystem = new THREE.Points( geometry, material );
+	scene.add( particleSystem );
+
+	var geometry = new THREE.Geometry();
+	for( var j = 0; j <= 2 * Math.PI; j += 2 * Math.PI / 144 ) {
+		var v = new THREE.Vector3( Math.cos( j ), .75 * Math.sin( j ), 0 );
+		v.multiplyScalar( 100 )
+		geometry.vertices.push( v );
+	}
+
+	for( var j = 0; j < 5; j++ ) {
+
+		var line = new THREE.MeshLine();
+		line.setGeometry( geometry );
+
+		var material = new THREE.MeshLineMaterial( {
+			useMap: false,
+			map: new THREE.Texture(),
+			color: new THREE.Color( 255, 255 ,255 ),
+			opacity: 1,
+			resolution: resolution,
+			sizeAttenuation: false,
+			lineWidth: 4,
+			near: camera.near,
+			far: camera.far,
+			opacity: .5,
+			transparent: true
+		});
+
+		var line = new THREE.Mesh( line.geometry, material );
+		var s = .5 + 2 * Math.random()
+		line.scale.set( s, s, s )
+		var r = 10;
+		line.position.set( Maf.randomInRange( -r, r ), Maf.randomInRange( -r, r ), Maf.randomInRange( -r, r ) );
+		line.rotation.x = Maf.randomInRange( - Math.PI / 4, Math.PI / 4 )
+		line.rotation.z = Maf.randomInRange( - Math.PI / 4, Math.PI / 4 )
+		scene.add( line );
+
+		lines.push( line );
+
+	}
+
+	container.appendChild( renderer.domElement );
+	
+	controls = new THREE.OrbitControls( camera, renderer.domElement );
+	
+	window.addEventListener( 'resize', onWindowResized );
+	onWindowResized();
+
+	cameraPoints = makeCameraPath();
+
+	animate();
+
+}
+
+function getOrbitPoint( r ) {
+
+	var p = new THREE.Vector3(
+		.5 - Math.random(),
+		.5 - Math.random(),
+		.5 - Math.random()
+	)
+	p.normalize().multiplyScalar( r );
+	return p;
+
+	var phi = Math.random() * 2 * Math.PI;
+	var theta = Math.random() * Math.PI;
+
+	return new THREE.Vector3(
+		r * Math.sin( theta ) * Math.cos( phi ),
+		r * Math.sin( theta ) * Math.sin( phi ),
+		r * Math.cos( theta )
+	);
+
+}
+
+var prevPoint = null;
+
+function makeCameraPath() {
+
+	var r = 300;
+	var mid = getOrbitPoint( 2 * r );
+	s.p0 = prevPoint || getOrbitPoint( r );
+	var t = s.p0.clone().sub( mid ).multiplyScalar( .5 )
+	s.p1 = mid.clone().add( t )
+	s.p3 = getOrbitPoint( r );
+	var t = s.p3.clone().sub( mid ).multiplyScalar( .5 )
+	s.p2 = mid.clone().add( t );
+
+	s.calculate();
+
+	s.calculateDistances();
+	s.reticulate( { distancePerStep: .5 });
+
+	prevPoint = s.p3;
+
+	/*var geometry = new THREE.Geometry();
+   
+for( var j = 0; j < s.lPoints.length - 1; j++ ) {
+
+    var from = s.lPoints[ j ],
+        to = s.lPoints[ j + 1 ];
+    geometry.vertices.push( from.clone() );
+    geometry.vertices.push( to.clone() );
+
+}
+
+material = new THREE.LineBasicMaterial( { 
+    color: 0x404040 + Math.random() * 0xbfbfbf, 
+    linewidth: 4
+} );
+
+var line = new THREE.Line( geometry, material );
+scene.add( line );*/
+
+	return s.lPoints
+
+}
+
+function sampleCameraPath( points, t ) {
+
+	var p = Math.floor( t * ( points.length - 1 ) );
+	return points[ p ];
+
+}
+
+function onWindowResized() {
+	
+	renderer.setSize( container.clientWidth, container.clientHeight );
+	composer.setSize( container.clientWidth * dPR, container.clientHeight * dPR );
+	camera.aspect = container.clientWidth / container.clientHeight;
+	camera.updateProjectionMatrix();
+
+	resolution.set( container.clientWidth, container.clientHeight )
+	pixelatePass.params.amount = Math.round( container.clientWidth / 2 );
+
+	var s = .25;
+	depthTexture = WAGNER.Pass.prototype.getOfflineTexture( s * composer.width, s * composer.height, true )
+
+}
+
+var hash = null;
+var tracker = new THREE.Vector3( 0, 0, -1 );
+var previous = new THREE.Vector3( 0 , 0, 0 );
+var previousRot = new THREE.Vector3( 0, 0, 0 );
+var tmpRot = new THREE.Vector3( 0, 0, 0 )
+var motion = new THREE.Vector3();
+
+function animate() {
+
+	requestAnimationFrame( animate );
+	render();
+
+}
+
+var mm = new THREE.Vector3( 0 , 0, 0 );
+var count = 0;
+var tmpVector = new THREE.Vector3();
+var target = new THREE.Vector3( 0, -50, 0 )
+function render() {
+	
+	var timestamp = performance.now();
+
+	mesh.rotation.y = .0001 * timestamp;
+	mesh.material.uniforms.time.value = .0005 * timestamp;
+
+	var a  = .001 * timestamp;
+	var r = 150;
+	//camera.position.set( 1 * r * Math.cos( a ), 0 * 50 * Math.cos( .9 * a ), 1 * r * Math.sin( a ) );
+	//camera.lookAt( scene.position )
+	
+	var r = 5
+	var cameraT = count / r;
+	tmpVector.copy( sampleCameraPath( cameraPoints, cameraT ) )
+	tmpVector.sub( camera.position );
+	tmpVector.multiplyScalar( .1 );
+	//camera.position.add( tmpVector )
+	//camera.lookAt( target )
+
+	count += 1 * clock.getDelta()
+	if( count > r ) {
+		cameraPoints = makeCameraPath()
+		count %= r;
+	}
+
+	camera.updateMatrixWorld()
+	camera.updateProjectionMatrix();
+
+	var m = new THREE.Matrix4();
+	m.makeRotationFromEuler( camera.rotation );
+	m.getInverse( m );
+
+	tracker.copy( camera.position );
+	tracker.sub( previous );
+	tracker.applyMatrix4( m );
+	
+	motion.copy( tracker );
+	motion.multiplyScalar( 50 )
+	data.innerHTML = motion.x.toFixed( 2 ) + '<br/>' + motion.y.toFixed( 2 ) + '<br/>' + motion.z.toFixed( 2 );
+
+	/*tmpRot.set( camera.rotation.x, camera.rotation.y, camera.rotation.z );
+	tmpRot.sub( previousRot );
+	motion.copy( tmpRot )
+	var tmp = motion.x;
+	motion.x = motion.y;
+	motion.y = tmp
+	motion.multiplyScalar( 200000 )*/
+
+	/*var e = .5;
+	mm.x += ( motion.x - mm.x ) * e;
+	mm.y += ( motion.y - mm.y ) * e;
+	mm.z += ( motion.z - mm.z ) * e;*/
+	mm.copy( motion )
+	
+	composer.reset();
+	
+	renderer.setClearColor( 0xffffff, 1);
+	plane.material.uniforms.drawDepth.value = 1;
+	planeBack.material.uniforms.drawDepth.value = 1;
+	lines.forEach( function( l ) { l.material.uniforms.drawDepth.value = 1 } );
+	particleSystem.material.uniforms.drawDepth.value = 1
+	mesh.material.uniforms.drawDepth.value = 1
+	composer.render( scene, camera, null, depthTexture );
+
+	renderer.setClearColor( 0x181d30, 1);
+	plane.material.uniforms.drawDepth.value = 0;
+	planeBack.material.uniforms.drawDepth.value = 0;
+	lines.forEach( function( l ) { l.material.uniforms.drawDepth.value = 0 } );
+	particleSystem.material.uniforms.drawDepth.value = 0
+	mesh.material.uniforms.drawDepth.value = 0
+	composer.render( scene, camera );
+
+	motionPass.params.tBias = depthTexture;
+	motionPass.params.delta.set( mm.x, mm.y, mm.z )
+	motionPass.params.invertBiasMap = true;
+	composer.pass( motionPass )
+
+	composer.pass( fxaaPass );
+//	composer.pass( rgbSplitPass )
+	composer.pass( glowPass );
+//	composer.pass( pixelatePass )
+//	composer.pass( chromaticAberrationPass )
+	composer.pass( noisePass );
+	composer.pass( vignettePass );
+//	composer.pass( bleachPass );
+//	composer.pass( chromaticAberrationPass )
+//	composer.setSource( depthTexture )
+	composer.toScreen();
+
+	//renderer.render( scene, camera )
+
+	previous.copy( camera.position );
+	previousRot.set( camera.rotation.x, camera.rotation.y, camera.rotation.z );
+
+}
+
+</script>
+	
+	</body>
+</html>
